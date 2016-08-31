@@ -21,8 +21,8 @@ def connect(db_name="tournament"):
 def deleteMatches():
     """Remove all the match records from the database."""
     database, cursor = connect()
-    cursor.execute("DELETE FROM matches;")
     cursor.execute("DELETE FROM winners;")
+    cursor.execute("DELETE FROM matches;")
     database.commit()
     database.close()
 
@@ -50,7 +50,9 @@ def registerPlayer(name):
       name: the player's full name (need not be unique).
     """
     database, cursor = connect()
-    cursor.execute("INSERT INTO players (name) VALUES (%s);", (name,))
+    cursor.execute("""
+        INSERT INTO players (name) 
+          VALUES (%s);""", (name,))
     database.commit()
     database.close()
 
@@ -66,10 +68,15 @@ def playerStandings():
         id: the player's unique id (assigned by the database)
         name: the player's full name (as registered)
         wins: the number of matches the player has won
-        matches: the number of matches the player has played
+        matches: the number of matches a player has been in
     """
     database, cursor = connect()
-    cursor.execute("SELECT * FROM players ORDER BY wins DESC;")
+    cursor.execute("""
+        SELECT w.id, w.name, w.wins, m.matches
+          FROM wincounter AS w
+            LEFT JOIN matchcounter AS m
+              ON w.id = m.id
+        ORDER BY wins DESC""")
     standings = cursor.fetchall() 
     database.close()
     return standings
@@ -78,17 +85,26 @@ def playerStandings():
 def reportMatch(winner, loser):
     """Records the outcome of a single match between two players.
 
+    Updates the matches table by adding a match using the two player
+    IDs, and updates the winners table by adding the ID from the
+    newly created match, as well as the ID of the winner.
+
     Args:
       winner:  the id number of the player who won
       loser:  the id number of the player who lost
     """
     database, cursor = connect()
-    cursor.execute("UPDATE players SET wins = wins + 1 " + 
-        "WHERE id = %s", (winner,))
-    cursor.execute("UPDATE players SET matches = matches + 1 " +
-        "WHERE id = %s", (winner,))
-    cursor.execute("UPDATE players SET matches = matches + 1 " +
-        "WHERE id = %s", (loser,))
+    cursor.execute("""
+        INSERT INTO matches (p1, p2) 
+        VALUES (%s, %s);""", (winner, loser))
+    cursor.execute("""
+        SELECT matchID 
+        FROM matches 
+        WHERE p1 = %s AND p2 = %s;""", (winner, loser))
+    match = cursor.fetchone()[0]
+    cursor.execute("""
+        INSERT INTO winners (matchID, winner) 
+        VALUES (%s, %s);""", (match, winner))
     database.commit()
     database.close()
  
@@ -109,17 +125,21 @@ def swissPairings():
     """
     database, cursor = connect()
     database.autocommit = True
-    cursor.execute("DELETE FROM matches;")
     pairings = playerStandings()
+    cursor.execute("DELETE FROM pairings;")
     previous_player = []
     for player in pairings:
         if previous_player:
-            cursor.execute("INSERT INTO matches (p1, p2) VALUES (%s, %s);",
-            (previous_player[0], player[0]))
+            cursor.execute("""
+                INSERT INTO pairings (p1, name1, p2, name2) 
+                VALUES (%s, %s, %s, %s);""",
+                (previous_player[0], previous_player[1],
+                player[0], player[1]))
             previous_player = []
         else:
             previous_player = player
-    cursor.execute("SELECT * FROM matches;")
+    cursor.execute("SELECT p1, name1, p2, name2 FROM pairings;")
     swiss_pairings = cursor.fetchall()
+    cursor.execute("DELETE FROM pairings;")
     database.close()
     return swiss_pairings
